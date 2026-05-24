@@ -1,42 +1,57 @@
 import { getServiceClient, jsonResponse, errorResponse } from "../_shared/supabase.ts";
-import { sendToChannel } from "../_shared/dispatcher-providers.ts";
+import { getSendToChannel } from "../_shared/dispatcher-send.ts";
 
 const BATCH = 50;
-const BACKOFF_MINUTES = [1, 5, 30, 120, 240, 480, 720, 1440];
+const LEASE_MINUTES = 5;
 
-Deno.serve(async (req) => {
-  const cronSecret = Deno.env.get("COHORT_CRON_SECRET");
-  const auth = req.headers.get("authorization");
-  if (cronSecret && auth !== `Bearer ${cronSecret}`) {
-    return errorResponse("unauthorized", 401);
-  }
+export interface OutboundRow {
+  id: string;
+  user_id: string;
+  channel: string;
+  template_key: string;
+  payload: Record<string, unknown>;
+  attempt_count: number;
+  idempotency_key: string;
+  provider_message_id: string | null;
+}
 
-  const supabase = getServiceClient();
-  const now = new Date().toISOString();
-
-  const { data: pending, error } = await supabase
-    .from("outbound_deliveries")
-    .select("id, user_id, channel, template_key, payload, attempt_count, idempotency_key")
-    .in("status", ["pending", "failed"])
-    .lte("next_attempt_at", now)
-    .order("created_at", { ascending: true })
-    .limit(BATCH);
-
-  if (error) return errorResponse(error.message, 500);
-
+export async function processDeliveryBatch(
+  supabase: ReturnType<typeof getServiceClient>,
+  rows: OutboundRow[],
+): Promise<{ delivered: number; failed: number; repaired: number }> {
+  const sendToChannel = getSendToChannel();
   let delivered = 0;
   let failed = 0;
+  let repaired = 0;
 
-  for (const row of pending ?? []) {
-    const { data: claimed } = await supabase
-      .from("outbound_deliveries")
-      .update({ status: "sending" })
-      .eq("id", row.id)
-      .in("status", ["pending", "failed"])
-      .select("id")
-      .maybeSingle();
+  for (const row of rows) {
+    // Repair: provider_message_id already on row (stranded after partial write)
+    if (row.provider_message_id) {
+      await supabase.rpc("repair_outbound_delivered", { _delivery_id: row.id });
+      repaired++;
+      delivered++;
+      continue;
+    }
 
-    if (!claimed) continue;
+    // Repair: completed attempt exists but row not marked delivered (crash after HTTP, before complete RPC)
+    const { data: synced } = await supabase.rpc("sync_outbound_from_completed_attempt", {
+      _delivery_id: row.id,
+    });
+    if (synced) {
+      repaired++;
+      delivered++;
+      continue;
+    }
+
+    const { data: hasCompleted } = await supabase.rpc("outbound_has_completed_attempt", {
+      _delivery_id: row.id,
+    });
+    if (hasCompleted) {
+      await supabase.rpc("sync_outbound_from_completed_attempt", { _delivery_id: row.id });
+      repaired++;
+      delivered++;
+      continue;
+    }
 
     const { data: identity } = await supabase
       .from("channel_identities")
@@ -48,49 +63,74 @@ Deno.serve(async (req) => {
       .maybeSingle();
 
     if (!identity?.external_id) {
-      await markFailed(supabase, row.id, row.attempt_count, "no_channel_identity");
+      await supabase.rpc("fail_outbound_delivery", {
+        _delivery_id: row.id,
+        _attempt_number: row.attempt_count + 1,
+        _error: "no_channel_identity",
+      });
       failed++;
       continue;
     }
 
+    const { data: attemptNum, error: startErr } = await supabase.rpc("start_delivery_attempt", {
+      _delivery_id: row.id,
+    });
+    if (startErr) {
+      failed++;
+      continue;
+    }
+
+    const attempt = attemptNum as number;
+
     try {
       const { providerMessageId } = await sendToChannel(
-        row.channel,
+        row.channel as "telegram" | "whatsapp" | "sms" | "web",
         identity.external_id,
         row.template_key,
-        row.payload as Record<string, unknown>,
+        row.payload ?? {},
       );
-      await supabase.from("outbound_deliveries").update({
-        status: "delivered",
-        provider_message_id: providerMessageId,
-        delivered_at: new Date().toISOString(),
-        last_error: null,
-      }).eq("id", row.id);
+
+      await supabase.rpc("complete_outbound_delivery", {
+        _delivery_id: row.id,
+        _attempt_number: attempt,
+        _provider_message_id: providerMessageId,
+      });
       delivered++;
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      await markFailed(supabase, row.id, row.attempt_count, msg);
+      await supabase.rpc("fail_outbound_delivery", {
+        _delivery_id: row.id,
+        _attempt_number: attempt,
+        _error: msg,
+      });
       failed++;
     }
   }
 
-  return jsonResponse({ processed: pending?.length ?? 0, delivered, failed });
-});
-
-async function markFailed(
-  supabase: ReturnType<typeof getServiceClient>,
-  id: string,
-  attemptCount: number,
-  err: string,
-) {
-  const next = attemptCount + 1;
-  const dead = next >= BACKOFF_MINUTES.length;
-  const backoffMin = BACKOFF_MINUTES[Math.min(next, BACKOFF_MINUTES.length - 1)];
-  const nextAt = new Date(Date.now() + backoffMin * 60 * 1000).toISOString();
-  await supabase.from("outbound_deliveries").update({
-    status: dead ? "dead" : "failed",
-    attempt_count: next,
-    next_attempt_at: nextAt,
-    last_error: err.slice(0, 500),
-  }).eq("id", id);
+  return { delivered, failed, repaired };
 }
+
+Deno.serve(async (req) => {
+  const cronSecret = Deno.env.get("COHORT_CRON_SECRET");
+  const auth = req.headers.get("authorization");
+  if (cronSecret && auth !== `Bearer ${cronSecret}`) {
+    return errorResponse("unauthorized", 401);
+  }
+
+  const supabase = getServiceClient();
+
+  const { data: claimed, error } = await supabase.rpc("claim_outbound_deliveries", {
+    _batch: BATCH,
+    _lease_minutes: LEASE_MINUTES,
+  });
+
+  if (error) return errorResponse(error.message, 500);
+
+  const rows = (claimed ?? []) as OutboundRow[];
+  const result = await processDeliveryBatch(supabase, rows);
+
+  return jsonResponse({
+    claimed: rows.length,
+    ...result,
+  });
+});

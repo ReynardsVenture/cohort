@@ -1,8 +1,15 @@
 import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 import { getConfigInt } from "./config.ts";
 import { assertUserEligible, getPreferredChannel } from "./identity.ts";
-import { emitDomainEvent, enqueueOutbound, idempotencyKey } from "./outbox.ts";
-import type { CoreAction, CoreResult, OutboundIntent } from "./types.ts";
+import { enqueueOutbound, idempotencyKey } from "./outbox.ts";
+import type { CoreAction, CoreResult } from "./types.ts";
+
+function rpcResult(data: Record<string, unknown> | null, error: { message: string } | null): CoreResult {
+  if (error) return { success: false, message: error.message };
+  if (!data) return { success: false, message: "empty_response" };
+  if (data.success === false) return { success: false, message: String(data.error ?? "failed") };
+  return { success: true, message: data.message as string | undefined, data };
+}
 
 export async function handleCoreAction(
   supabase: SupabaseClient,
@@ -42,11 +49,14 @@ async function handleOnboardingMessage(
     .eq("status", "active")
     .maybeSingle();
 
-  const messages = session?.messages ?? [];
+  const messages = (session?.messages ?? []) as { role: string; content: string }[];
   messages.push({ role: "user", content: text, at: new Date().toISOString() });
 
   if (session) {
-    await supabase.from("ai_interview_sessions").update({ messages, updated_at: new Date().toISOString() }).eq("id", session.id);
+    await supabase.from("ai_interview_sessions").update({
+      messages,
+      updated_at: new Date().toISOString(),
+    }).eq("id", session.id);
   } else {
     await supabase.from("ai_interview_sessions").insert({
       user_id: userId,
@@ -56,7 +66,6 @@ async function handleOnboardingMessage(
     });
   }
 
-  // AI response delegated to ai-proxy via separate call; return placeholder intent
   const channel = await getPreferredChannel(supabase, userId);
   return {
     success: true,
@@ -71,7 +80,10 @@ async function handleOnboardingMessage(
   };
 }
 
-async function handleSendSpark(supabase: SupabaseClient, action: Extract<CoreAction, { type: "SendSpark" }>): Promise<CoreResult> {
+async function handleSendSpark(
+  supabase: SupabaseClient,
+  action: Extract<CoreAction, { type: "SendSpark" }>,
+): Promise<CoreResult> {
   const eligible = await assertUserEligible(supabase, action.userId);
   if (!eligible.ok) return { success: false, message: eligible.reason };
 
@@ -81,181 +93,58 @@ async function handleSendSpark(supabase: SupabaseClient, action: Extract<CoreAct
     return { success: false, message: "invalid_message_length" };
   }
 
-  const { data: blocked } = await supabase.rpc("is_blocked", { _a: action.userId, _b: action.toUserId });
-  if (blocked) return { success: false, message: "blocked" };
-
-  const budget = await getConfigInt(supabase, "sparks_per_week_free", 5);
-  const { data: quota } = await supabase.from("weekly_quotas").select("sparks_sent, sparks_budget")
-    .eq("user_id", action.userId).eq("round_id", action.roundId).maybeSingle();
-  const sent = quota?.sparks_sent ?? 0;
-  const limit = quota?.sparks_budget ?? budget;
-  if (sent >= limit) return { success: false, message: "spark_budget_exceeded" };
-
   const expiryHours = await getConfigInt(supabase, "spark_expiry_hours", 48);
   const expiresAt = new Date(Date.now() + expiryHours * 3600 * 1000).toISOString();
 
-  const { data: spark, error } = await supabase.from("sparks").insert({
-    round_id: action.roundId,
-    from_user_id: action.userId,
-    to_user_id: action.toUserId,
-    style: action.style,
-    message: action.message,
-    intent_level: action.intentLevel,
-    expires_at: expiresAt,
-  }).select("id").single();
-  if (error) return { success: false, message: error.message };
+  const { data, error } = await supabase.rpc("send_spark_tx", {
+    _from_user_id: action.userId,
+    _to_user_id: action.toUserId,
+    _round_id: action.roundId,
+    _style: action.style,
+    _message: action.message,
+    _intent_level: action.intentLevel,
+    _expires_at: expiresAt,
+  });
 
-  await supabase.from("weekly_quotas").upsert({
-    user_id: action.userId,
-    round_id: action.roundId,
-    sparks_sent: sent + 1,
-    sparks_budget: limit,
-  }, { onConflict: "user_id,round_id" });
-
-  const eventId = await emitDomainEvent(supabase, "spark", spark.id, "spark.sent", { sparkId: spark.id });
-  const recipientChannel = await getPreferredChannel(supabase, action.toUserId);
-  const intents: OutboundIntent[] = [{
-    userId: action.toUserId,
-    channel: recipientChannel,
-    templateKey: "spark_received",
-    payload: { preview: action.message.slice(0, 80), sparkId: spark.id },
-    idempotencyKey: idempotencyKey(eventId, action.toUserId, "spark_received"),
-  }];
-
-  return { success: true, outboundIntents: intents };
+  return rpcResult(data as Record<string, unknown>, error);
 }
 
-async function handleRespondSpark(supabase: SupabaseClient, action: Extract<CoreAction, { type: "RespondSpark" }>): Promise<CoreResult> {
-  const { data: spark } = await supabase.from("sparks").select("*").eq("id", action.sparkId).single();
-  if (!spark || spark.to_user_id !== action.userId) return { success: false, message: "not_found" };
-  if (spark.status !== "pending") return { success: false, message: "invalid_status" };
-
+async function handleRespondSpark(
+  supabase: SupabaseClient,
+  action: Extract<CoreAction, { type: "RespondSpark" }>,
+): Promise<CoreResult> {
   if (!action.accept) {
-    await supabase.from("sparks").update({ status: "declined", updated_at: new Date().toISOString() }).eq("id", action.sparkId);
-    const channel = await getPreferredChannel(supabase, spark.from_user_id);
-    return {
-      success: true,
-      outboundIntents: [{
-        userId: spark.from_user_id,
-        channel,
-        templateKey: "spark_declined",
-        payload: {},
-        idempotencyKey: idempotencyKey(action.sparkId, "declined"),
-      }],
-    };
+    const { data, error } = await supabase.rpc("respond_spark_decline_tx", {
+      _user_id: action.userId,
+      _spark_id: action.sparkId,
+    });
+    return rpcResult(data as Record<string, unknown>, error);
   }
-
-  await supabase.from("sparks").update({ status: "accepted", updated_at: new Date().toISOString() }).eq("id", action.sparkId);
 
   const turnHours = await getConfigInt(supabase, "thread_turn_hours", 72);
   const deadline = new Date(Date.now() + turnHours * 3600 * 1000).toISOString();
 
-  const { data: thread } = await supabase.from("threads").insert({
-    spark_id: action.sparkId,
-    user_a: spark.from_user_id,
-    user_b: spark.to_user_id,
-    turn_deadline: deadline,
-    facilitator_state: { turn: 1 },
-  }).select("id").single();
-
-  await supabase.from("contracts").insert({
-    thread_id: thread!.id,
-    user_a: spark.from_user_id,
-    user_b: spark.to_user_id,
+  const { data, error } = await supabase.rpc("respond_spark_accept_tx", {
+    _user_id: action.userId,
+    _spark_id: action.sparkId,
+    _turn_deadline: deadline,
   });
 
-  const firstPrompt = "Was hat euch in den letzten Tagen am meisten beschäftigt — und warum?";
-  await supabase.from("thread_turns").insert({
-    thread_id: thread!.id,
-    turn_number: 1,
-    facilitator_prompt: firstPrompt,
-  });
-
-  const intents: OutboundIntent[] = [];
-  for (const uid of [spark.from_user_id, spark.to_user_id]) {
-    intents.push({
-      userId: uid,
-      channel: await getPreferredChannel(supabase, uid),
-      templateKey: "spark_accepted",
-      payload: { threadId: thread!.id },
-      idempotencyKey: idempotencyKey(action.sparkId, uid, "accepted"),
-    });
-    intents.push({
-      userId: uid,
-      channel: await getPreferredChannel(supabase, uid),
-      templateKey: "thread_prompt",
-      payload: { prompt: firstPrompt },
-      idempotencyKey: idempotencyKey(thread!.id, uid, "turn1"),
-    });
-  }
-
-  return { success: true, outboundIntents: intents };
+  return rpcResult(data as Record<string, unknown>, error);
 }
 
 async function handleSubmitThreadTurn(
   supabase: SupabaseClient,
   action: Extract<CoreAction, { type: "SubmitThreadTurn" }>,
 ): Promise<CoreResult> {
-  const { data: thread } = await supabase.from("threads").select("*").eq("id", action.threadId).single();
-  if (!thread || thread.status !== "active") return { success: false, message: "invalid_thread" };
-  if (action.userId !== thread.user_a && action.userId !== thread.user_b) {
-    return { success: false, message: "not_participant" };
-  }
-
-  const { data: turn } = await supabase.from("thread_turns")
-    .select("*").eq("thread_id", action.threadId).eq("turn_number", thread.current_turn).single();
-  if (!turn) return { success: false, message: "no_active_turn" };
-
-  const isA = action.userId === thread.user_a;
-  const patch = isA
-    ? { user_a_response: action.response, submitted_at_a: new Date().toISOString() }
-    : { user_b_response: action.response, submitted_at_b: new Date().toISOString() };
-  await supabase.from("thread_turns").update(patch).eq("id", turn.id);
-
-  const { data: updated } = await supabase.from("thread_turns").select("*").eq("id", turn.id).single();
-  if (!updated?.user_a_response || !updated?.user_b_response) {
-    return { success: true, message: "waiting_for_partner" };
-  }
-
-  if (thread.current_turn >= 4) {
-    await supabase.from("threads").update({ status: "ready_for_contract", updated_at: new Date().toISOString() }).eq("id", thread.id);
-    const intents: OutboundIntent[] = [];
-    for (const uid of [thread.user_a, thread.user_b]) {
-      intents.push({
-        userId: uid,
-        channel: await getPreferredChannel(supabase, uid),
-        templateKey: "contract_request",
-        payload: {},
-        idempotencyKey: idempotencyKey(thread.id, uid, "contract"),
-      });
-    }
-    return { success: true, outboundIntents: intents };
-  }
-
-  const nextTurn = thread.current_turn + 1;
-  const nextPrompt = "Was würdet ihr beim ersten Treffen gerne herausfinden?";
   const turnHours = await getConfigInt(supabase, "thread_turn_hours", 72);
-  await supabase.from("threads").update({
-    current_turn: nextTurn,
-    turn_deadline: new Date(Date.now() + turnHours * 3600 * 1000).toISOString(),
-  }).eq("id", thread.id);
-  await supabase.from("thread_turns").insert({
-    thread_id: thread.id,
-    turn_number: nextTurn,
-    facilitator_prompt: nextPrompt,
+  const { data, error } = await supabase.rpc("submit_thread_turn_tx", {
+    _user_id: action.userId,
+    _thread_id: action.threadId,
+    _response: action.response,
+    _turn_hours: turnHours,
   });
-
-  const intents: OutboundIntent[] = [];
-  for (const uid of [thread.user_a, thread.user_b]) {
-    intents.push({
-      userId: uid,
-      channel: await getPreferredChannel(supabase, uid),
-      templateKey: "thread_prompt",
-      payload: { prompt: nextPrompt },
-      idempotencyKey: idempotencyKey(thread.id, uid, `turn${nextTurn}`),
-    });
-  }
-  return { success: true, outboundIntents: intents };
+  return rpcResult(data as Record<string, unknown>, error);
 }
 
 async function handleSubmitContract(
@@ -270,73 +159,35 @@ async function handleSubmitContract(
     _pace: pace,
   });
   if (error) return { success: false, message: error.message };
-
-  const outcome = data?.outcome;
-  if (outcome !== "revealed") return { success: true, message: outcome };
-
-  const { data: thread } = await supabase.from("threads").select("user_a, user_b").eq("id", action.threadId).single();
-  await supabase.from("relay_threads").insert({
-    match_thread_id: action.threadId,
-    alias_a: "Dein Match",
-    alias_b: "Dein Match",
-  });
-
-  const intents: OutboundIntent[] = [];
-  for (const uid of [thread!.user_a, thread!.user_b]) {
-    intents.push({
-      userId: uid,
-      channel: await getPreferredChannel(supabase, uid),
-      templateKey: "reveal_unlocked",
-      payload: {},
-      idempotencyKey: idempotencyKey(action.threadId, uid, "reveal"),
-    });
-  }
-  return { success: true, outboundIntents: intents };
+  const outcome = (data as { outcome?: string })?.outcome;
+  return { success: true, message: outcome };
 }
 
 async function handleSendRelayMessage(
   supabase: SupabaseClient,
   action: Extract<CoreAction, { type: "SendRelayMessage" }>,
 ): Promise<CoreResult> {
-  const { data: thread } = await supabase.from("threads").select("*").eq("id", action.threadId).single();
-  if (!thread || !["revealed", "date_alignment", "match_closed"].includes(thread.status)) {
-    return { success: false, message: "not_revealed" };
-  }
-
-  const recipientId = action.userId === thread.user_a ? thread.user_b : thread.user_a;
-  const { data: relay } = await supabase.from("relay_threads").select("id, alias_a, alias_b").eq("match_thread_id", action.threadId).single();
-  if (!relay) return { success: false, message: "no_relay" };
-
-  await supabase.from("relay_messages").insert({
-    relay_thread_id: relay.id,
-    sender_user_id: action.userId,
-    body: action.body,
+  const { data, error } = await supabase.rpc("send_relay_message_tx", {
+    _sender_user_id: action.userId,
+    _thread_id: action.threadId,
+    _body: action.body,
+    _client_message_id: action.clientMessageId ?? null,
   });
-  await supabase.from("messages").insert({
-    thread_id: action.threadId,
-    sender_user_id: action.userId,
-    body: action.body,
-  });
-
-  const alias = action.userId === thread.user_a ? relay.alias_a : relay.alias_b;
-  return {
-    success: true,
-    outboundIntents: [{
-      userId: recipientId,
-      channel: await getPreferredChannel(supabase, recipientId),
-      templateKey: "relay_message",
-      payload: { alias, body: action.body },
-      idempotencyKey: idempotencyKey("relay", action.threadId, String(Date.now()), recipientId),
-    }],
-  };
+  return rpcResult(data as Record<string, unknown>, error);
 }
 
-async function handleBlockUser(supabase: SupabaseClient, action: Extract<CoreAction, { type: "BlockUser" }>): Promise<CoreResult> {
+async function handleBlockUser(
+  supabase: SupabaseClient,
+  action: Extract<CoreAction, { type: "BlockUser" }>,
+): Promise<CoreResult> {
   await supabase.from("blocks").insert({ blocker_id: action.userId, blocked_id: action.blockedId });
   return { success: true };
 }
 
-async function handleReportUser(supabase: SupabaseClient, action: Extract<CoreAction, { type: "ReportUser" }>): Promise<CoreResult> {
+async function handleReportUser(
+  supabase: SupabaseClient,
+  action: Extract<CoreAction, { type: "ReportUser" }>,
+): Promise<CoreResult> {
   await supabase.from("reports").insert({
     reporter_id: action.userId,
     reported_user_id: action.reportedId,
@@ -346,6 +197,7 @@ async function handleReportUser(supabase: SupabaseClient, action: Extract<CoreAc
   return { success: true };
 }
 
+/** Only for handlers that still return outboundIntents (e.g. onboarding). Transactional RPCs enqueue in-DB. */
 export async function persistCoreResult(supabase: SupabaseClient, result: CoreResult): Promise<void> {
   if (result.outboundIntents?.length) {
     await enqueueOutbound(supabase, result.outboundIntents);

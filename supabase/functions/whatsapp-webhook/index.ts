@@ -83,7 +83,7 @@ Deno.serve(async (req) => {
       channel: "whatsapp",
       templateKey: "safety_notice",
       payload: { message: aiJson.reply },
-      idempotencyKey: idempotencyKey("wa_ai", resolved.userId, String(Date.now())),
+      idempotencyKey: idempotencyKey("wa_ai", resolved.userId, `wa:${msg.id}`),
     }]);
   }
 

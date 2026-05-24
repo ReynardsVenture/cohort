@@ -71,8 +71,7 @@ Deno.serve(async (req) => {
         sparkId: pendingSpark.id,
         accept: true,
       });
-      await persistCoreResult(supabase, result);
-      return jsonResponse({ ok: true });
+      return jsonResponse({ ok: true, ...result });
     }
   }
   if (/^(nein|no)$/i.test(text)) {
@@ -85,8 +84,7 @@ Deno.serve(async (req) => {
         sparkId: pendingSpark.id,
         accept: false,
       });
-      await persistCoreResult(supabase, result);
-      return jsonResponse({ ok: true });
+      return jsonResponse({ ok: true, ...result });
     }
   }
 
@@ -105,8 +103,7 @@ Deno.serve(async (req) => {
       threadId: thread.id,
       response: text,
     });
-    await persistCoreResult(supabase, result);
-    return jsonResponse({ ok: true });
+    return jsonResponse({ ok: true, ...result });
   }
 
   // Revealed relay
@@ -123,9 +120,10 @@ Deno.serve(async (req) => {
       userId: resolved.userId,
       threadId: revealed.id,
       body: text,
+      clientMessageId: message.message_id != null ? `tg:${message.message_id}` : undefined,
     });
-    await persistCoreResult(supabase, result);
-    return jsonResponse({ ok: true });
+    // Outbox enqueued inside send_relay_message_tx RPC
+    return jsonResponse({ ok: true, ...result });
   }
 
   // Onboarding / AI interview
@@ -144,7 +142,7 @@ Deno.serve(async (req) => {
       channel: "telegram",
       templateKey: "safety_notice",
       payload: { message: aiJson.reply },
-      idempotencyKey: idempotencyKey("ai_reply", resolved.userId, String(Date.now())),
+      idempotencyKey: idempotencyKey("ai_reply", resolved.userId, `tg:${message.message_id}`),
     }]);
   }
 

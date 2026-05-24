@@ -1,6 +1,7 @@
 import { renderTemplate } from "./templates.ts";
 import type { ChannelType } from "./types.ts";
 
+/** @see dispatcher-send.ts for idempotency policy */
 export async function sendToChannel(
   channel: ChannelType,
   externalId: string,
