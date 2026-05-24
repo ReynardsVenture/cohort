@@ -45,11 +45,12 @@ export async function resolveChannelIdentity(
     .single();
   if (ciErr) throw ciErr;
 
-  await supabase.from("profiles").insert({
+  const { error: profileErr } = await supabase.from("profiles").insert({
     user_id: user.id,
     region_key: "berlin",
     onboarding_status: "interviewing",
   });
+  if (profileErr) throw profileErr;
 
   return { userId: user.id, channelIdentityId: ci.id, isNew: true };
 }

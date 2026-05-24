@@ -4,21 +4,40 @@ import { handleCoreAction, persistCoreResult } from "../_shared/core-handler.ts"
 import { enqueueOutbound, idempotencyKey } from "../_shared/outbox.ts";
 import { internalAuthHeaders } from "../_shared/internal-auth.ts";
 
+console.error("[telegram-webhook] module loaded");
+
 Deno.serve(async (req) => {
+  console.error("[telegram-webhook] request", {
+    method: req.method,
+    hasSecretHeader: Boolean(req.headers.get("X-Telegram-Bot-Api-Secret-Token")),
+    secretConfigured: Boolean(Deno.env.get("TELEGRAM_WEBHOOK_SECRET")),
+  });
+
   if (req.method !== "POST") return new Response("ok");
 
   const secret = Deno.env.get("TELEGRAM_WEBHOOK_SECRET");
-  if (secret && req.headers.get("X-Telegram-Bot-Api-Secret-Token") !== secret) {
+  const headerSecret = req.headers.get("X-Telegram-Bot-Api-Secret-Token");
+  if (secret && headerSecret !== secret) {
+    console.error("[telegram-webhook] webhook secret mismatch — re-run setWebhook with matching secret_token", {
+      headerPresent: Boolean(headerSecret),
+    });
     return new Response("forbidden", { status: 403 });
   }
 
   try {
     const update = await req.json();
     const message = update.message ?? update.edited_message;
-    if (!message?.text || !message.chat?.id) return jsonResponse({ ok: true });
+    if (!message?.text || !message.chat?.id) {
+      console.error("[telegram-webhook] ignored update (no text/chat)", {
+        keys: Object.keys(update ?? {}),
+      });
+      return jsonResponse({ ok: true });
+    }
 
     const chatId = String(message.chat.id);
     const text = message.text.trim();
+    console.error("[telegram-webhook] message", { chatId, textPreview: text.slice(0, 40) });
+
     const supabase = getServiceClient();
 
     const resolved = await resolveChannelIdentity(
@@ -27,6 +46,10 @@ Deno.serve(async (req) => {
       chatId,
       message.from?.username,
     );
+    console.error("[telegram-webhook] identity", {
+      userId: resolved.userId,
+      isNew: resolved.isNew,
+    });
 
     const { data: user } = await supabase.from("users").select("age_verified_at, primary_phone").eq("id", resolved.userId).single();
 
@@ -47,6 +70,7 @@ Deno.serve(async (req) => {
           payload: {},
           idempotencyKey: idempotencyKey("age_ok", resolved.userId),
         }]);
+        console.error("[telegram-webhook] age verified via DOB");
         return jsonResponse({ ok: true });
       }
       await enqueueOutbound(supabase, [{
@@ -56,10 +80,10 @@ Deno.serve(async (req) => {
         payload: {},
         idempotencyKey: idempotencyKey("age_gate", resolved.userId),
       }]);
+      console.error("[telegram-webhook] age gate enqueued");
       return jsonResponse({ ok: true });
     }
 
-    // Spark responses
     if (/^(ja|yes)$/i.test(text)) {
       const { data: pendingSpark } = await supabase.from("sparks")
         .select("id").eq("to_user_id", resolved.userId).eq("status", "pending").limit(1).maybeSingle();
@@ -87,7 +111,6 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Active thread turn
     const { data: thread } = await supabase.from("threads")
       .select("id, status")
       .or(`user_a.eq.${resolved.userId},user_b.eq.${resolved.userId}`)
@@ -105,7 +128,6 @@ Deno.serve(async (req) => {
       return jsonResponse({ ok: true, ...result });
     }
 
-    // Revealed relay
     const { data: revealed } = await supabase.from("threads")
       .select("id, status")
       .or(`user_a.eq.${resolved.userId},user_b.eq.${resolved.userId}`)
@@ -124,13 +146,16 @@ Deno.serve(async (req) => {
       return jsonResponse({ ok: true, ...result });
     }
 
-    // Onboarding / AI interview
+    console.error("[telegram-webhook] onboarding path");
     const aiRes = await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/ai-proxy`, {
       method: "POST",
       headers: internalAuthHeaders(),
       body: JSON.stringify({ job: "onboarding", user_id: resolved.userId, message: text }),
     });
     const aiJson = await aiRes.json();
+    if (!aiRes.ok) {
+      console.error("[telegram-webhook] ai-proxy failed", { status: aiRes.status, body: aiJson });
+    }
     if (aiJson.reply) {
       await enqueueOutbound(supabase, [{
         userId: resolved.userId,
@@ -148,9 +173,10 @@ Deno.serve(async (req) => {
     });
     await persistCoreResult(supabase, result);
 
+    console.error("[telegram-webhook] done");
     return jsonResponse({ ok: true });
   } catch (e) {
-    console.error(e);
+    console.error("[telegram-webhook] error", e instanceof Error ? e.stack ?? e.message : e);
     return jsonResponse({ ok: true });
   }
 });
