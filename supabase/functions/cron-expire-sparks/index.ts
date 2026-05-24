@@ -1,10 +1,9 @@
 import { getServiceClient, jsonResponse, errorResponse } from "../_shared/supabase.ts";
+import { requireCronAuth } from "../_shared/internal-auth.ts";
 
 Deno.serve(async (req) => {
-  const cronSecret = Deno.env.get("COHORT_CRON_SECRET");
-  if (cronSecret && req.headers.get("authorization") !== `Bearer ${cronSecret}`) {
-    return errorResponse("unauthorized", 401);
-  }
+  const authErr = requireCronAuth(req);
+  if (authErr) return authErr;
 
   const supabase = getServiceClient();
   const { data, error } = await supabase.from("sparks")

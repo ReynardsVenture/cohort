@@ -1,4 +1,5 @@
 import { getServiceClient, jsonResponse, errorResponse } from "../_shared/supabase.ts";
+import { requireInternalAuth } from "../_shared/internal-auth.ts";
 
 async function hash(val: string, salt: string): Promise<string> {
   const data = new TextEncoder().encode(`${salt}:${val}`);
@@ -7,6 +8,8 @@ async function hash(val: string, salt: string): Promise<string> {
 }
 
 Deno.serve(async (req) => {
+  const authErr = requireInternalAuth(req);
+  if (authErr) return authErr;
   if (req.method !== "POST") return errorResponse("method_not_allowed", 405);
   const { user_id, device_hash } = await req.json();
   const ip = req.headers.get("x-forwarded-for")?.split(",")[0] ?? "unknown";

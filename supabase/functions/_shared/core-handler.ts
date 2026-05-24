@@ -158,9 +158,10 @@ async function handleSubmitContract(
     _decision: action.decision,
     _pace: pace,
   });
-  if (error) return { success: false, message: error.message };
+  const result = rpcResult(data as Record<string, unknown>, error);
+  if (!result.success) return result;
   const outcome = (data as { outcome?: string })?.outcome;
-  return { success: true, message: outcome };
+  return { success: true, message: outcome, data: data as Record<string, unknown> };
 }
 
 async function handleSendRelayMessage(

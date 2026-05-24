@@ -1,7 +1,10 @@
 import { getServiceClient, jsonResponse, errorResponse } from "../_shared/supabase.ts";
 import { getConfigInt } from "../_shared/config.ts";
+import { requireInternalAuth } from "../_shared/internal-auth.ts";
 
 Deno.serve(async (req) => {
+  const authErr = requireInternalAuth(req);
+  if (authErr) return authErr;
   if (req.method !== "POST") return errorResponse("method_not_allowed", 405);
   const { user_id, date_of_birth } = await req.json();
   if (!user_id || !date_of_birth) return errorResponse("missing_params");

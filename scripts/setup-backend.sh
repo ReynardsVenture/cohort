@@ -65,6 +65,7 @@ echo ""
 echo "Set Edge Function secrets (edit values, then re-run this block):"
 cat <<'SECRETS'
   supabase secrets set \
+    COHORT_INTERNAL_SECRET="$(openssl rand -hex 32)" \
     COHORT_CRON_SECRET="$(openssl rand -hex 32)" \
     COHORT_PHONE_OTP_SALT="$(openssl rand -hex 16)" \
     ANTHROPIC_API_KEY="your-key" \

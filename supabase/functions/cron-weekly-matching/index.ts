@@ -2,6 +2,7 @@ import { getServiceClient, jsonResponse, errorResponse } from "../_shared/supaba
 import { pickLane, matchKey } from "../_shared/lane-matching.ts";
 import { enqueueOutbound, emitDomainEvent, idempotencyKey } from "../_shared/outbox.ts";
 import { getPreferredChannel } from "../_shared/identity.ts";
+import { internalAuthHeaders, requireCronAuth } from "../_shared/internal-auth.ts";
 
 function weekStart(d = new Date()): string {
   const day = d.getUTCDay();
@@ -11,10 +12,8 @@ function weekStart(d = new Date()): string {
 }
 
 Deno.serve(async (req) => {
-  const cronSecret = Deno.env.get("COHORT_CRON_SECRET");
-  if (cronSecret && req.headers.get("authorization") !== `Bearer ${cronSecret}`) {
-    return errorResponse("unauthorized", 401);
-  }
+  const authErr = requireCronAuth(req);
+  if (authErr) return authErr;
 
   const supabase = getServiceClient();
   const ws = weekStart();
@@ -79,10 +78,7 @@ Deno.serve(async (req) => {
 
       const aiRes = await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/ai-proxy`, {
         method: "POST",
-        headers: {
-          Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}`,
-          "Content-Type": "application/json",
-        },
+        headers: internalAuthHeaders(),
         body: JSON.stringify({
           job: "matching",
           user_id: member.user_id,

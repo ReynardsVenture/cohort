@@ -2,6 +2,7 @@ import { getServiceClient, jsonResponse } from "../_shared/supabase.ts";
 import { resolveChannelIdentity } from "../_shared/identity.ts";
 import { handleCoreAction, persistCoreResult } from "../_shared/core-handler.ts";
 import { enqueueOutbound, idempotencyKey } from "../_shared/outbox.ts";
+import { internalAuthHeaders } from "../_shared/internal-auth.ts";
 
 Deno.serve(async (req) => {
   if (req.method !== "POST") return new Response("ok");
@@ -35,10 +36,7 @@ Deno.serve(async (req) => {
       const iso = `${y}-${m.padStart(2, "0")}-${d.padStart(2, "0")}`;
       await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/identity-set-age`, {
         method: "POST",
-        headers: {
-          Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}`,
-          "Content-Type": "application/json",
-        },
+        headers: internalAuthHeaders(),
         body: JSON.stringify({ user_id: resolved.userId, date_of_birth: iso }),
       });
       await enqueueOutbound(supabase, [{
@@ -129,10 +127,7 @@ Deno.serve(async (req) => {
   // Onboarding / AI interview
   const aiRes = await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/ai-proxy`, {
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}`,
-      "Content-Type": "application/json",
-    },
+    headers: internalAuthHeaders(),
     body: JSON.stringify({ job: "onboarding", user_id: resolved.userId, message: text }),
   });
   const aiJson = await aiRes.json();

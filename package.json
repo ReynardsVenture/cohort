@@ -15,7 +15,8 @@
     "functions:serve": "supabase functions serve",
     "setup:backend": "bash scripts/setup-backend.sh",
     "setup:local": "bash scripts/setup-backend.sh local",
-    "test": "deno test --allow-env supabase/functions/_shared/ supabase/functions/dispatcher-run/"
+    "test": "deno test --allow-env supabase/functions/_shared/ supabase/functions/dispatcher-run/",
+    "test:db": "supabase test db"
   },
   "devDependencies": {
     "supabase": "^2.101.0"

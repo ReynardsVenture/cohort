@@ -2,6 +2,8 @@ import { getServiceClient, jsonResponse } from "../_shared/supabase.ts";
 import { resolveChannelIdentity } from "../_shared/identity.ts";
 import { handleCoreAction, persistCoreResult } from "../_shared/core-handler.ts";
 import { enqueueOutbound, idempotencyKey } from "../_shared/outbox.ts";
+import { internalAuthHeaders, isDevOpenMode } from "../_shared/internal-auth.ts";
+import { verifyWhatsAppSignature } from "../_shared/provider-auth.ts";
 
 Deno.serve(async (req) => {
   if (req.method === "GET") {
@@ -14,7 +16,16 @@ Deno.serve(async (req) => {
     return new Response("forbidden", { status: 403 });
   }
 
-  const body = await req.json();
+  const rawBody = await req.text();
+  const appSecret = Deno.env.get("WHATSAPP_APP_SECRET");
+  if (appSecret) {
+    const valid = await verifyWhatsAppSignature(rawBody, req.headers.get("x-hub-signature-256"));
+    if (!valid) return new Response("forbidden", { status: 403 });
+  } else if (!isDevOpenMode()) {
+    return new Response("webhook_not_configured", { status: 503 });
+  }
+
+  const body = JSON.parse(rawBody);
   const entry = body.entry?.[0]?.changes?.[0]?.value;
   const msg = entry?.messages?.[0];
   if (!msg?.text?.body || !msg.from) return jsonResponse({ ok: true });
@@ -22,7 +33,6 @@ Deno.serve(async (req) => {
   const supabase = getServiceClient();
   const resolved = await resolveChannelIdentity(supabase, "whatsapp", msg.from);
 
-  // Record WhatsApp contact consent on first inbound message
   await supabase.from("users").update({
     whatsapp_contact_consent_at: new Date().toISOString(),
     preferred_outbound_channel: "whatsapp",
@@ -43,10 +53,7 @@ Deno.serve(async (req) => {
       const [, d, m, y] = dobMatch;
       await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/identity-set-age`, {
         method: "POST",
-        headers: {
-          Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}`,
-          "Content-Type": "application/json",
-        },
+        headers: internalAuthHeaders(),
         body: JSON.stringify({ user_id: resolved.userId, date_of_birth: `${y}-${m.padStart(2, "0")}-${d.padStart(2, "0")}` }),
       });
     } else {
@@ -70,10 +77,7 @@ Deno.serve(async (req) => {
 
   const aiRes = await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/ai-proxy`, {
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}`,
-      "Content-Type": "application/json",
-    },
+    headers: internalAuthHeaders(),
     body: JSON.stringify({ job: "onboarding", user_id: resolved.userId, message: text }),
   });
   const aiJson = await aiRes.json();

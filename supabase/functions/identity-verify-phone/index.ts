@@ -1,6 +1,7 @@
 import { getServiceClient, jsonResponse, errorResponse } from "../_shared/supabase.ts";
 import { enqueueOutbound, idempotencyKey } from "../_shared/outbox.ts";
 import { getPreferredChannel } from "../_shared/identity.ts";
+import { requireInternalAuth } from "../_shared/internal-auth.ts";
 
 async function hashCode(phone: string, code: string): Promise<string> {
   const salt = Deno.env.get("COHORT_PHONE_OTP_SALT") ?? "cohort-dev-salt";
@@ -14,6 +15,8 @@ function generateCode(): string {
 }
 
 Deno.serve(async (req) => {
+  const authErr = requireInternalAuth(req);
+  if (authErr) return authErr;
   if (req.method !== "POST") return errorResponse("method_not_allowed", 405);
   const body = await req.json();
   const supabase = getServiceClient();

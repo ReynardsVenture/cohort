@@ -1,5 +1,6 @@
 import { getServiceClient, jsonResponse, errorResponse } from "../_shared/supabase.ts";
 import { getSendToChannel } from "../_shared/dispatcher-send.ts";
+import { requireCronAuth } from "../_shared/internal-auth.ts";
 
 const BATCH = 50;
 const LEASE_MINUTES = 5;
@@ -111,11 +112,8 @@ export async function processDeliveryBatch(
 }
 
 Deno.serve(async (req) => {
-  const cronSecret = Deno.env.get("COHORT_CRON_SECRET");
-  const auth = req.headers.get("authorization");
-  if (cronSecret && auth !== `Bearer ${cronSecret}`) {
-    return errorResponse("unauthorized", 401);
-  }
+  const authErr = requireCronAuth(req);
+  if (authErr) return authErr;
 
   const supabase = getServiceClient();
 

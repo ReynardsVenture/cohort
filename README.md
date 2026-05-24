@@ -98,9 +98,37 @@ npm run functions:serve
 
 ## Security
 
-- Identity, dispatcher, relay, payments: service-role + tests
+Channel adapters resolve `(channel, external_id) → user_id` in-process; business HTTP functions are **internal-only** (not client JWT yet).
+
+### Edge function auth (application-layer)
+
+| Category | Functions | Credential |
+|----------|-----------|------------|
+| **internal-secret** | `send-spark`, `respond-spark`, `submit-thread-turn`, `submit-contract-decision`, `send-relay-message`, `identity-*`, `ai-proxy`, `register-fingerprint`, `request-data-export`, `request-account-deletion`, `create-checkout` | `Authorization: Bearer $COHORT_INTERNAL_SECRET` |
+| **provider-verified** | `telegram-webhook`, `whatsapp-webhook`, `sms-webhook`, `payments-webhook` | Telegram secret / Meta `X-Hub-Signature-256` / Twilio signature / Stripe signature |
+| **cron-secret** | `dispatcher-run`, `cron-*` | `Authorization: Bearer $COHORT_CRON_SECRET` |
+
+Set secrets before deploy:
+
+```bash
+supabase secrets set \
+  COHORT_INTERNAL_SECRET="$(openssl rand -hex 32)" \
+  COHORT_CRON_SECRET="$(openssl rand -hex 32)"
+```
+
+Local `supabase functions serve` only: `COHORT_ALLOW_OPEN_INTERNAL=true` (never in production).
+
+Future web app (Phase 11): separate client-facing endpoints with `verify_jwt = true` and `user_id` from the token only.
+
 - No peer channel IDs in relay payloads
 - `age_verification_method = self_declared` at launch (pluggable)
+
+### Tests
+
+```bash
+npm test          # Deno unit tests (auth, dispatcher, outbox)
+npm run test:db   # SQL transactional tests (requires Docker + supabase start)
+```
 
 ## License
 

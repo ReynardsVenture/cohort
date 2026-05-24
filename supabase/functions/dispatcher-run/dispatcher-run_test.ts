@@ -115,6 +115,37 @@ Deno.test("relay idempotency key format is stable (no Date.now)", () => {
   assertEquals(k1, `relay:${relayMsgId}:${recipient}`);
 });
 
+Deno.test("processDeliveryBatch: first pass sends once; retry after crash syncs without second HTTP", async () => {
+  let sendCalls = 0;
+  setSendToChannelForTests(async () => {
+    sendCalls++;
+    return { providerMessageId: "tg-crash" };
+  });
+
+  const supabaseFirst = mockSupabase({
+    outbound_has_completed_attempt: () => false,
+    sync_outbound_from_completed_attempt: () => false,
+    start_delivery_attempt: () => 1,
+    complete_outbound_delivery: () => {
+      throw new Error("simulated crash after provider send");
+    },
+    fail_outbound_delivery: () => null,
+  });
+
+  const first = await processDeliveryBatch(supabaseFirst, [sampleRow]);
+  assertEquals(sendCalls, 1);
+  assertEquals(first.failed, 1);
+
+  const supabaseRetry = mockSupabase({
+    outbound_has_completed_attempt: () => true,
+    sync_outbound_from_completed_attempt: () => true,
+  });
+  const retry = await processDeliveryBatch(supabaseRetry, [sampleRow]);
+  assertEquals(sendCalls, 1);
+  assertEquals(retry.delivered, 1);
+  assertEquals(retry.repaired, 1);
+});
+
 Deno.test("two rows processed independently — one send each", async () => {
   let sendCalls = 0;
   setSendToChannelForTests(async () => {
