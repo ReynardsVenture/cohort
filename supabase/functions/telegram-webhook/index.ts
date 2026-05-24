@@ -67,7 +67,7 @@ Deno.serve(async (req) => {
             payload: {},
             idempotencyKey: idempotencyKey("age_fail", resolved.userId, msgKey),
           }]);
-          triggerDispatcherFlush();
+          await triggerDispatcherFlush();
           console.error("[telegram-webhook] age set failed", ageResult);
           return jsonResponse({ ok: true });
         }
@@ -78,7 +78,7 @@ Deno.serve(async (req) => {
           payload: {},
           idempotencyKey: idempotencyKey("age_ok", resolved.userId, msgKey),
         }]);
-        triggerDispatcherFlush();
+        await triggerDispatcherFlush();
         console.error("[telegram-webhook] age verified via DOB, welcome enqueued");
         return jsonResponse({ ok: true });
       }
@@ -90,7 +90,7 @@ Deno.serve(async (req) => {
         payload: {},
         idempotencyKey: idempotencyKey("age_gate", resolved.userId, msgKey),
       }]);
-      triggerDispatcherFlush();
+      await triggerDispatcherFlush();
       console.error("[telegram-webhook] age gate enqueued");
       return jsonResponse({ ok: true });
     }
@@ -105,7 +105,7 @@ Deno.serve(async (req) => {
           sparkId: pendingSpark.id,
           accept: true,
         });
-        triggerDispatcherFlush();
+        await triggerDispatcherFlush();
         return jsonResponse({ ok: true, ...result });
       }
     }
@@ -119,7 +119,7 @@ Deno.serve(async (req) => {
           sparkId: pendingSpark.id,
           accept: false,
         });
-        triggerDispatcherFlush();
+        await triggerDispatcherFlush();
         return jsonResponse({ ok: true, ...result });
       }
     }
@@ -138,7 +138,7 @@ Deno.serve(async (req) => {
         threadId: thread.id,
         response: text,
       });
-      triggerDispatcherFlush();
+      await triggerDispatcherFlush();
       return jsonResponse({ ok: true, ...result });
     }
 
@@ -157,7 +157,7 @@ Deno.serve(async (req) => {
         body: text,
         clientMessageId: message.message_id != null ? `tg:${message.message_id}` : undefined,
       });
-      triggerDispatcherFlush();
+      await triggerDispatcherFlush();
       return jsonResponse({ ok: true, ...result });
     }
 
@@ -179,7 +179,7 @@ Deno.serve(async (req) => {
         },
         idempotencyKey: idempotencyKey("ai_err", resolved.userId, msgKey),
       }]);
-      triggerDispatcherFlush();
+      await triggerDispatcherFlush();
       return jsonResponse({ ok: true });
     }
     if (aiJson.reply) {
@@ -198,7 +198,7 @@ Deno.serve(async (req) => {
       text,
     });
     await persistCoreResult(supabase, result);
-    triggerDispatcherFlush();
+    await triggerDispatcherFlush();
 
     console.error("[telegram-webhook] done");
     return jsonResponse({ ok: true });
