@@ -2,9 +2,9 @@ import { getServiceClient, jsonResponse } from "../_shared/supabase.ts";
 import { resolveChannelIdentity } from "../_shared/identity.ts";
 import { handleCoreAction, persistCoreResult } from "../_shared/core-handler.ts";
 import { enqueueOutbound, idempotencyKey } from "../_shared/outbox.ts";
-import { internalAuthHeaders } from "../_shared/internal-auth.ts";
 import { setUserAgeFromIso } from "../_shared/user-age.ts";
 import { triggerDispatcherFlush } from "../_shared/trigger-dispatcher.ts";
+import { runOnboardingJob } from "../_shared/ai-jobs.ts";
 
 console.error("[telegram-webhook] module loaded");
 
@@ -162,14 +162,19 @@ Deno.serve(async (req) => {
     }
 
     console.error("[telegram-webhook] onboarding path");
-    const aiRes = await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/ai-proxy`, {
-      method: "POST",
-      headers: internalAuthHeaders(),
-      body: JSON.stringify({ job: "onboarding", user_id: resolved.userId, message: text }),
-    });
-    const aiJson = await aiRes.json();
-    if (!aiRes.ok) {
-      console.error("[telegram-webhook] ai-proxy failed", { status: aiRes.status, body: aiJson });
+    try {
+      const aiJson = await runOnboardingJob(supabase, resolved.userId, text);
+      if (aiJson.reply) {
+        await enqueueOutbound(supabase, [{
+          userId: resolved.userId,
+          channel: "telegram",
+          templateKey: "safety_notice",
+          payload: { message: aiJson.reply },
+          idempotencyKey: idempotencyKey("ai_reply", resolved.userId, msgKey),
+        }]);
+      }
+    } catch (aiErr) {
+      console.error("[telegram-webhook] onboarding AI failed", aiErr);
       await enqueueOutbound(supabase, [{
         userId: resolved.userId,
         channel: "telegram",
@@ -181,15 +186,6 @@ Deno.serve(async (req) => {
       }]);
       await triggerDispatcherFlush();
       return jsonResponse({ ok: true });
-    }
-    if (aiJson.reply) {
-      await enqueueOutbound(supabase, [{
-        userId: resolved.userId,
-        channel: "telegram",
-        templateKey: "safety_notice",
-        payload: { message: aiJson.reply },
-        idempotencyKey: idempotencyKey("ai_reply", resolved.userId, msgKey),
-      }]);
     }
 
     const result = await handleCoreAction(supabase, {
