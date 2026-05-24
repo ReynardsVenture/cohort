@@ -1,0 +1,4 @@
+# Supabase local / linked state
+.branches
+.temp
+.env

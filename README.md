@@ -13,16 +13,45 @@ Telegram-first build; WhatsApp adapter last. Supabase **EU** required.
 
 ## Quick start
 
-1. Create a Supabase project in **EU** and link:
+### Prerequisites
 
-   ```bash
-   cd cohort
-   cp .env.example .env
-   # fill SUPABASE_* and channel keys
-   supabase link --project-ref <ref>
-   supabase db push
-   supabase functions deploy
-   ```
+- **Supabase CLI** (installed globally: `npm install -g supabase`, or use `npm run supabase` in this repo)
+- **Cloud:** Supabase account + project in **EU** region
+- **Local (optional):** Docker Desktop for `supabase start`
+
+### One-command setup (cloud)
+
+```bash
+cd cohort
+npm install
+supabase login                    # opens browser — complete once
+bash scripts/setup-backend.sh   # link project, db push, optional deploy
+```
+
+Or step by step:
+
+```bash
+cd cohort
+cp .env.example .env
+supabase login
+# Create project at https://supabase.com/dashboard (region: Europe)
+supabase link --project-ref YOUR_PROJECT_REF
+npm run db:push
+npm run functions:deploy
+```
+
+Copy API keys into `.env`:
+
+```bash
+supabase projects api-keys --project-ref "$(cat supabase/.temp/project-ref)"
+```
+
+### Local development (Docker)
+
+```bash
+npm run setup:local   # supabase start + db reset
+npm run functions:serve
+```
 
 2. Set Telegram webhook:
 

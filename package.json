@@ -4,8 +4,20 @@
   "version": "0.1.0",
   "description": "Cohort — channel-native slow-dating platform",
   "scripts": {
-    "db:lint": "echo 'Run: supabase db lint (requires Supabase CLI)'",
+    "supabase": "supabase",
+    "db:push": "supabase db push",
+    "db:reset": "supabase db reset",
+    "db:lint": "supabase db lint",
+    "start": "supabase start",
+    "stop": "supabase stop",
+    "status": "supabase status",
+    "functions:deploy": "supabase functions deploy",
     "functions:serve": "supabase functions serve",
-    "test": "deno test --allow-env supabase/functions/"
+    "setup:backend": "bash scripts/setup-backend.sh",
+    "setup:local": "bash scripts/setup-backend.sh local",
+    "test": "deno test --allow-env supabase/functions/_shared/ supabase/functions/dispatcher-run/"
+  },
+  "devDependencies": {
+    "supabase": "^2.101.0"
   }
 }
