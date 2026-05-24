@@ -38,9 +38,6 @@ enabled = true
 policy = "per_worker"
 inspector_port = 8083
 
-[functions]
-verify_jwt = false
-
 [functions.identity-resolve]
 verify_jwt = false
 
