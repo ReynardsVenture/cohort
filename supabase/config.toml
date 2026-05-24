@@ -1,0 +1,86 @@
+# Cohort — Supabase project (EU region when linking)
+# See: https://supabase.com/docs/guides/cli/config
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "storage"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+port = 54322
+major_version = 15
+
+[studio]
+enabled = true
+port = 54323
+
+[functions]
+verify_jwt = false
+
+[functions.identity-resolve]
+verify_jwt = false
+
+[functions.identity-verify-phone]
+verify_jwt = false
+
+[functions.identity-set-age]
+verify_jwt = false
+
+[functions.dispatcher-run]
+verify_jwt = false
+
+[functions.telegram-webhook]
+verify_jwt = false
+
+[functions.core-handle]
+verify_jwt = false
+
+[functions.send-spark]
+verify_jwt = false
+
+[functions.respond-spark]
+verify_jwt = false
+
+[functions.submit-thread-turn]
+verify_jwt = false
+
+[functions.submit-contract-decision]
+verify_jwt = false
+
+[functions.send-relay-message]
+verify_jwt = false
+
+[functions.ai-proxy]
+verify_jwt = false
+
+[functions.cron-weekly-matching]
+verify_jwt = false
+
+[functions.cron-activate-rounds]
+verify_jwt = false
+
+[functions.cron-expire-sparks]
+verify_jwt = false
+
+[functions.payments-webhook]
+verify_jwt = false
+
+[functions.create-checkout]
+verify_jwt = false
+
+[functions.sms-webhook]
+verify_jwt = false
+
+[functions.whatsapp-webhook]
+verify_jwt = false
+
+[functions.register-fingerprint]
+verify_jwt = false
+
+[functions.request-data-export]
+verify_jwt = false
+
+[functions.request-account-deletion]
+verify_jwt = false

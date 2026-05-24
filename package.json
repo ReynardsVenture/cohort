@@ -1,0 +1,11 @@
+{
+  "name": "cohort",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Cohort — channel-native slow-dating platform",
+  "scripts": {
+    "db:lint": "echo 'Run: supabase db lint (requires Supabase CLI)'",
+    "functions:serve": "supabase functions serve",
+    "test": "deno test --allow-env supabase/functions/"
+  }
+}
