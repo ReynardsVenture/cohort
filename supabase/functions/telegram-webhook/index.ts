@@ -1,6 +1,6 @@
 import { getServiceClient, jsonResponse } from "../_shared/supabase.ts";
 import { resolveChannelIdentity } from "../_shared/identity.ts";
-import { handleCoreAction, persistCoreResult } from "../_shared/core-handler.ts";
+import { handleCoreAction } from "../_shared/core-handler.ts";
 import { enqueueOutbound, idempotencyKey } from "../_shared/outbox.ts";
 import { setUserAgeFromIso } from "../_shared/user-age.ts";
 import { triggerDispatcherFlush } from "../_shared/trigger-dispatcher.ts";
@@ -174,7 +174,8 @@ Deno.serve(async (req) => {
         }]);
       }
     } catch (aiErr) {
-      console.error("[telegram-webhook] onboarding AI failed", aiErr);
+      const detail = aiErr instanceof Error ? aiErr.message : String(aiErr);
+      console.error("[telegram-webhook] onboarding AI failed", detail, aiErr);
       await enqueueOutbound(supabase, [{
         userId: resolved.userId,
         channel: "telegram",
@@ -188,15 +189,9 @@ Deno.serve(async (req) => {
       return jsonResponse({ ok: true });
     }
 
-    const result = await handleCoreAction(supabase, {
-      type: "OnboardingMessage",
-      userId: resolved.userId,
-      text,
-    });
-    await persistCoreResult(supabase, result);
-    await triggerDispatcherFlush();
-
+    // Session + transcript already updated in runOnboardingJob — skip duplicate OnboardingMessage write
     console.error("[telegram-webhook] done");
+    await triggerDispatcherFlush();
     return jsonResponse({ ok: true });
   } catch (e) {
     console.error("[telegram-webhook] error", e instanceof Error ? e.stack ?? e.message : e);

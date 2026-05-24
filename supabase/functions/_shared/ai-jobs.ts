@@ -18,6 +18,12 @@ async function loadPrompt(job: string): Promise<string> {
   }
 }
 
+function sanitizeModelId(model: string): string {
+  return model.replace(/^["']+|["']+$/g, "").trim();
+}
+
+const FALLBACK_MODEL = "claude-sonnet-4-5-20250929";
+
 async function callClaude(
   model: string,
   system: string,
@@ -26,28 +32,55 @@ async function callClaude(
   const key = Deno.env.get("ANTHROPIC_API_KEY");
   if (!key) throw new Error("ANTHROPIC_API_KEY missing");
 
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "x-api-key": key,
-      "anthropic-version": "2023-06-01",
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({
-      model,
-      max_tokens: 1024,
-      system: [{ type: "text", text: system, cache_control: { type: "ephemeral" } }],
-      messages: messages.map((m) => ({
-        role: m.role === "assistant" ? "assistant" : "user",
-        content: m.content,
-      })),
-    }),
-  });
+  const modelId = sanitizeModelId(model);
+  const body = {
+    model: modelId,
+    max_tokens: 1024,
+    system,
+    messages: messages.map((m) => ({
+      role: m.role === "assistant" ? "assistant" : "user",
+      content: m.content,
+    })),
+  };
 
-  const json = await res.json();
-  if (!res.ok) throw new Error(json.error?.message ?? JSON.stringify(json));
-  const block = json.content?.[0];
-  return block?.type === "text" ? block.text : "";
+  const call = async (useModel: string) => {
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "x-api-key": key,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ ...body, model: useModel }),
+    });
+    const raw = await res.text();
+    let json: { error?: { message?: string; type?: string }; content?: { type: string; text?: string }[] };
+    try {
+      json = JSON.parse(raw);
+    } catch {
+      throw new Error(`anthropic_non_json:${res.status}:${raw.slice(0, 200)}`);
+    }
+    if (!res.ok) {
+      const msg = json.error?.message ?? raw.slice(0, 300);
+      const err = new Error(`anthropic_${res.status}:${msg}`);
+      (err as Error & { status?: number; type?: string }).status = res.status;
+      (err as Error & { type?: string }).type = json.error?.type;
+      throw err;
+    }
+    const block = json.content?.[0];
+    return block?.type === "text" ? block.text ?? "" : "";
+  };
+
+  try {
+    return await call(modelId);
+  } catch (e) {
+    const typed = e as Error & { status?: number; type?: string };
+    if (typed.status === 404 || typed.type === "not_found_error") {
+      console.error("[ai-jobs] model not found, retrying", { model: modelId, fallback: FALLBACK_MODEL });
+      return await call(FALLBACK_MODEL);
+    }
+    throw e;
+  }
 }
 
 export async function runOnboardingJob(
