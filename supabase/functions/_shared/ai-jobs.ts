@@ -14,7 +14,7 @@ async function loadPrompt(job: string): Promise<string> {
     if (!path) return "";
     return await Deno.readTextFile(new URL(`../../../prompts/${path}`, import.meta.url));
   } catch {
-    return "You are the Cohort AI matchmaker. Be helpful, concise, and never pretend to be human.";
+    return "You are the Cohort AI matchmaker for a slow-DATING app only (romantic dating, not networking or friendship). Be helpful, concise, never pretend to be human.";
   }
 }
 

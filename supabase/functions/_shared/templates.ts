@@ -9,8 +9,8 @@ export function renderTemplate(
   switch (templateKey) {
     case "welcome_new":
       return de
-        ? "Willkommen bei Cohort. Ich bin dein KI-Matchmaker (kein Mensch, kein Ersatz für echte Begegnungen). Schreib mir, wer du bist — wir starten mit einem kurzen Gespräch."
-        : "Welcome to Cohort. I'm your AI matchmaker (not a human, not a substitute for real connection). Tell me about yourself — we'll start with a short conversation.";
+        ? "Willkommen bei Cohort — einer Dating-App für bewusstes, langsames Kennenlernen (kein Networking, keine Freundschaftsborse). Ich bin dein KI-Matchmaker (kein Mensch). Schreib mir kurz, was du beim Dating suchst — wir starten mit einem kurzen Gespräch."
+        : "Welcome to Cohort — a dating app for intentional, slow dating (not networking or friend-matching). I'm your AI matchmaker (not a human). Tell me what you're looking for in dating — we'll start with a short conversation.";
     case "ai_disclosure":
       return de
         ? "Hinweis: Du chattest mit einer KI, die Gespräche moderiert und Matches vorschlägt — nicht mit einer Person, die sich als Partner ausgibt."
