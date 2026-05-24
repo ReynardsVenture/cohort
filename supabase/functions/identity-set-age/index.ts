@@ -1,6 +1,6 @@
 import { getServiceClient, jsonResponse, errorResponse } from "../_shared/supabase.ts";
-import { getConfigInt } from "../_shared/config.ts";
 import { requireInternalAuth } from "../_shared/internal-auth.ts";
+import { setUserAgeFromIso } from "../_shared/user-age.ts";
 
 Deno.serve(async (req) => {
   const authErr = requireInternalAuth(req);
@@ -9,22 +9,11 @@ Deno.serve(async (req) => {
   const { user_id, date_of_birth } = await req.json();
   if (!user_id || !date_of_birth) return errorResponse("missing_params");
 
-  const dob = new Date(date_of_birth);
-  if (isNaN(dob.getTime())) return errorResponse("invalid_date");
-
   const supabase = getServiceClient();
-  const minAge = await getConfigInt(supabase, "min_age_years", 18);
-  const ageMs = Date.now() - dob.getTime();
-  const ageYears = ageMs / (365.25 * 24 * 3600 * 1000);
-  if (ageYears < minAge) return errorResponse("underage", 403);
-
-  const { error } = await supabase.from("users").update({
-    date_of_birth: date_of_birth,
-    age_verified_at: new Date().toISOString(),
-    age_verification_method: "self_declared",
-    updated_at: new Date().toISOString(),
-  }).eq("id", user_id);
-
-  if (error) return errorResponse(error.message, 500);
+  const result = await setUserAgeFromIso(supabase, user_id, date_of_birth);
+  if (!result.ok) {
+    const status = result.error === "underage" ? 403 : 400;
+    return errorResponse(result.error, status);
+  }
   return jsonResponse({ ok: true });
 });

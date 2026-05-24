@@ -59,6 +59,14 @@ export function renderTemplate(
       return de
         ? "Bitte bestätige dein Geburtsdatum (TT.MM.JJJJ), um fortzufahren. Nur 18+."
         : "Please confirm your date of birth (DD.MM.YYYY). 18+ only.";
+    case "age_invalid_format":
+      return de
+        ? "Das Datum konnte ich nicht lesen. Bitte TT.MM.JJJJ senden (z.B. 24.05.1990)."
+        : "I couldn't read that date. Please send DD.MM.YYYY (e.g. 24.05.1990).";
+    case "age_underage":
+      return de
+        ? "Cohort ist nur für Personen ab 18. Wir können leider nicht fortfahren."
+        : "Cohort is only for people 18+. We can't continue.";
     case "safety_notice":
       return String(payload.message ?? (de ? "Sicherheitshinweis von Cohort." : "Safety notice from Cohort."));
     default:
